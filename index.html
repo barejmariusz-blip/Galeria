@@ -121,8 +121,8 @@
   }
   async function getDec(path, fresh) {
     // opis galerii zawsze świeży (żeby nie trzymać w pamięci starego błędu 404 sprzed publikacji)
-    let r = await fetch(path, { cache: fresh ? "no-cache" : "default" });
-    if (!r.ok) r = await fetch(path, { cache: "reload" });
+    let r = await fetch(path, { cache: fresh ? "no-store" : "default" });
+    if (!r.ok) r = await fetch(path + (path.includes("?") ? "&" : "?") + "r=" + Date.now(), { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const buf = new Uint8Array(await r.arrayBuffer());
     return crypto.subtle.decrypt({ name: "AES-GCM", iv: buf.slice(0, 12) }, key, buf.slice(12));
@@ -272,8 +272,17 @@
     if (!window.crypto || !crypto.subtle) return fail("Ta przeglądarka nie obsługuje galerii. Otwórz link w Chrome lub Safari.");
     try { key = await crypto.subtle.importKey("raw", b64u(keyStr), "AES-GCM", false, ["decrypt"]); }
     catch (e) { return fail("Nieprawidłowy link do galerii."); }
-    try { M = JSON.parse(new TextDecoder().decode(await getDec(`g/${gid}/m.bin`, true))); }
-    catch (e) { return fail(`Nie udało się otworzyć galerii (${e.message || e}).<br>Jeśli galeria została właśnie opublikowana, odczekaj 1–2 minuty i odśwież stronę.`); }
+    // świeżo opublikowana galeria może jeszcze nie być na serwerze - ponawiamy przez ok. 5 minut
+    for (let attempt = 0; ; attempt++) {
+      try { M = JSON.parse(new TextDecoder().decode(await getDec(`g/${gid}/m.bin?t=${Date.now()}`, true))); break; }
+      catch (e) {
+        if (String(e.message || e).indexOf("404") < 0 || attempt >= 30)
+          return fail(`Nie udało się otworzyć galerii (${e.message || e}).`);
+        document.querySelector("main").innerHTML = `<div class="lock">Galeria jest właśnie publikowana…<br>Strona odświeży się sama (zwykle 1–2 minuty).</div>`;
+        await new Promise(r => setTimeout(r, 10000));
+      }
+    }
+    document.querySelector("main").innerHTML = '<div class="grid" id="grid"></div><div id="msg"></div>';
     document.title = M.title || "Galeria";
     $("title").textContent = M.title || "Galeria";
     $("note").textContent = (M.note ? M.note + "\n" : "") + `${M.photos.length} zdjęć`;
